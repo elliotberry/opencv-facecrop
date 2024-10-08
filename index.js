@@ -1,8 +1,8 @@
-const {Canvas, createCanvas, Image, ImageData, loadImage} = require('canvas');
-const {JSDOM} = require('jsdom');
-const {writeFileSync, existsSync, statSync} = require('fs');
+import {Canvas, createCanvas, Image, ImageData, loadImage} from 'canvas';
+import {JSDOM} from 'jsdom';
+import {writeFileSync, existsSync, statSync} from 'fs';
 
-module.exports = async (file, name = 'output.jpg', type = 'image/jpeg', quality = 0.95, factor = 1, trainingSet = './node_modules/opencv-facecrop/resources/haarcascade_frontalface_default.xml') => {
+export default async (file, name = 'output.jpg', type = 'image/jpeg', quality = 0.95, factor = 1, trainingSet = './node_modules/opencv-facecrop/resources/haarcascade_frontalface_default.xml') => {
   let image, src, gray, faces, faceCascade;
 
     if (factor <= 0) throw new Error('Error: Scaling Factor passed is too low, should be greater than 0.');
