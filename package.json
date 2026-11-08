@@ -2,16 +2,11 @@
   "name": "opencv-facecrop",
   "version": "0.0.5",
   "description": "Npm package to autodetect and crop faces using opencv",
+  "type": "module",
   "main": "index.js",
+  "exports": "./index.js",
   "scripts": {
-    "test": "jest --silent --coverage"
-  },
-  "jest": {
-    "verbose": true,
-    "collectCoverageFrom": [
-      "<rootDir>/*.js"
-    ],
-    "testTimeout": 300000
+    "test": "node --test --test-timeout=300000 --experimental-test-coverage --test-coverage-include=index.js test/test.js"
   },
   "repository": {
     "type": "git",
@@ -34,11 +29,7 @@
   "homepage": "https://github.com/arghyadeep-k/opencv-facecrop#readme",
   "dependencies": {
     "canvas": "^3.2.3",
-    "fs": "0.0.1-security",
     "jsdom": "^31.0.0",
     "opencv4js": "3.4.3"
-  },
-  "devDependencies": {
-    "jest": "^30.5.2"
   }
 }

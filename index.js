@@ -1,8 +1,12 @@
-const {Canvas, createCanvas, Image, ImageData, loadImage} = require('canvas');
-const {JSDOM} = require('jsdom');
-const {writeFileSync, existsSync, statSync} = require('fs');
+import {Canvas, createCanvas, Image, ImageData, loadImage} from 'canvas';
+import {JSDOM} from 'jsdom';
+import {writeFileSync, readFileSync, existsSync, mkdirSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
 
-module.exports = async (file, name = 'output.jpg', type = 'image/jpeg', quality = 0.95, factor = 1, trainingSet = './node_modules/opencv-facecrop/resources/haarcascade_frontalface_default.xml') => {
+// Bundled classifier, resolved relative to this file so it works wherever the package is installed.
+const DEFAULT_TRAINING_SET = fileURLToPath(new URL('./resources/haarcascade_frontalface_default.xml', import.meta.url));
+
+export default async (file, name = 'output.jpg', type = 'image/jpeg', quality = 0.95, factor = 1, trainingSet = DEFAULT_TRAINING_SET) => {
   let image, src, gray, faces, faceCascade;
 
     if (factor <= 0) throw new Error('Error: Scaling Factor passed is too low, should be greater than 0.');
@@ -22,13 +26,18 @@ module.exports = async (file, name = 'output.jpg', type = 'image/jpeg', quality 
 
     console.log("Loading pre-trained classifier files...");
 
+    let classifierData;
     try {
-      statSync(trainingSet);
+      classifierData = readFileSync(trainingSet);
     } catch (err) {
       throw new Error('Error: Pre-Trained Classifier file failed to load.\n' + err.message);
     }
 
-    await faceCascade.load(trainingSet);
+    // OpenCV reads from its own virtual filesystem (only the cwd is mounted into it), so copy the
+    // classifier in rather than passing the host path, which may be absolute or outside the cwd.
+    const virtualClassifierPath = '/facecrop-classifier.xml';
+    cv.FS.writeFile(virtualClassifierPath, new Uint8Array(classifierData));
+    await faceCascade.load(virtualClassifierPath);
 
     console.log('Processing...');
     let mSize = new cv.Size(0, 0);
@@ -117,14 +126,20 @@ function loadOpenCV(rootDir = './work', localRootDir = process.cwd()) {
   if (global.Module && global.Module.onRuntimeInitialized && global.cv && global.cv.imread) {
     return Promise.resolve();
   }
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     installDOM();
+    // opencv4js must be loaded *after* global.Module is set (it reads it on load), so it is
+    // imported dynamically below rather than with a static top-level import.
+    let cvModule;
     global.Module = {
       onRuntimeInitialized() {
-        // We change emscripten current work directory to 'rootDir' so relative paths are resolved
-        // relative to the current local folder, as expected
-        cv.FS.chdir(rootDir);
-        resolve();
+        // The dynamic import may settle slightly after the runtime initialises, so wait for it.
+        cvModule.then(() => {
+          // We change emscripten current work directory to 'rootDir' so relative paths are resolved
+          // relative to the current local folder, as expected
+          global.cv.FS.chdir(rootDir);
+          resolve();
+        }).catch(reject);
       },
       preRun() {
         // preRun() is another callback like onRuntimeInitialized() but is called just before the
@@ -144,7 +159,10 @@ function loadOpenCV(rootDir = './work', localRootDir = process.cwd()) {
         FS.mount(FS.filesystems.NODEFS, {root: localRootDir}, rootDir);
       },
     };
-    global.cv = require('opencv4js');
+    cvModule = import('opencv4js').then(m => {
+      global.cv = m.default;
+    });
+    cvModule.catch(reject);
   });
   } catch (e) {
     console.log('Error loading ');
