@@ -37,6 +37,25 @@ If multiple faces are detected, the files will be automatically renamed to outpu
 */
 ```
 
+## Command Line Usage
+
+Installing the package also provides an `opencv-facecrop` command:
+
+```bash
+npx opencv-facecrop ./image-file.jpg -o ./dest/output.jpg -f 1.5
+```
+
+| Option | Alias | Default | Description |
+| --- | --- | --- | --- |
+| `<input>` | | | Path to the input image (required) |
+| `--output` | `-o` | `output.jpg` | Output file name |
+| `--type` | `-t` | `image/jpeg` | Output format: `image/jpeg` or `image/png` |
+| `--quality` | `-q` | `0.95` | JPEG quality from 0 to 1 |
+| `--factor` | `-f` | `1` | Scaling factor for the crop, must be greater than 0 |
+| `--classifier` | `-c` | bundled classifier | Path to a Haar cascade classifier XML file |
+
+Run `opencv-facecrop --help` for the full list. The command exits with a non-zero status if cropping fails.
+
 ## Results
 
 Original Image:

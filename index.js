@@ -1,6 +1,5 @@
-import {Canvas, createCanvas, Image, ImageData, loadImage} from 'canvas';
-import {JSDOM} from 'jsdom';
-import {writeFileSync, readFileSync, existsSync, mkdirSync} from 'node:fs';
+import {createCanvas, loadImage} from 'canvas';
+import {writeFileSync, readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 
 // Bundled classifier, resolved relative to this file so it works wherever the package is installed.
@@ -11,14 +10,17 @@ export default async (file, name = 'output.jpg', type = 'image/jpeg', quality = 
 
     if (factor <= 0) throw new Error('Error: Scaling Factor passed is too low, should be greater than 0.');
 
-    await loadOpenCV().catch(e => {
+    const {cv} = await loadOpenCV().catch(e => {
       throw new Error('Error: Loading OpenCV failed.\n' + e.message);
     });
     console.log("Loading file...");
     image = await loadImage(file).catch(e => {
       throw new Error('Error: Loading input image failed.\n' + e.message);
     });
-    if (image != null) src = cv.imread(image);
+    // Draw the image onto a canvas to read its RGBA pixels, then hand them to OpenCV.
+    const inputContext = createCanvas(image.width, image.height).getContext('2d');
+    inputContext.drawImage(image, 0, 0);
+    src = cv.matFromImageData(inputContext.getImageData(0, 0, image.width, image.height));
     gray = new cv.Mat();
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
     faces = new cv.RectVector();
@@ -33,11 +35,25 @@ export default async (file, name = 'output.jpg', type = 'image/jpeg', quality = 
       throw new Error('Error: Pre-Trained Classifier file failed to load.\n' + err.message);
     }
 
-    // OpenCV reads from its own virtual filesystem (only the cwd is mounted into it), so copy the
-    // classifier in rather than passing the host path, which may be absolute or outside the cwd.
-    const virtualClassifierPath = '/facecrop-classifier.xml';
-    cv.FS.writeFile(virtualClassifierPath, new Uint8Array(classifierData));
-    await faceCascade.load(virtualClassifierPath);
+    // OpenCV reads from its own in-memory filesystem, not the host's, so copy the classifier in
+    // rather than passing the host path, which may be absolute or outside the cwd.
+    const virtualClassifierName = 'facecrop-classifier.xml';
+    let classifierLoaded;
+    try {
+      cv.FS_unlink('/' + virtualClassifierName);
+    } catch {
+      // nothing left over from a previous run
+    }
+    cv.FS_createDataFile('/', virtualClassifierName, new Uint8Array(classifierData), true, false, false);
+    try {
+      classifierLoaded = faceCascade.load('/' + virtualClassifierName);
+    } catch {
+      // OpenCV throws a raw C++ exception pointer (not an Error) when the file is not a cascade.
+      classifierLoaded = false;
+    } finally {
+      cv.FS_unlink('/' + virtualClassifierName);
+    }
+    if (!classifierLoaded) throw new Error('Error: Pre-Trained Classifier file failed to load.\nNot a valid cascade classifier: ' + trainingSet);
 
     console.log('Processing...');
     let mSize = new cv.Size(0, 0);
@@ -86,17 +102,13 @@ export default async (file, name = 'output.jpg', type = 'image/jpeg', quality = 
 
       //console.log([point1,point2]);
 
-      const canvas = createCanvas(point2.x - point1.x, point2.y - point1.y);
-
-      let rect = new cv.Rect(point1.x, point1.y, point2.x - point1.x, point2.y - point1.y);
+      const width = point2.x - point1.x;
+      const height = point2.y - point1.y;
+      const canvas = createCanvas(width, height);
 
       console.log('Rendering output image...');
-      let dst = src.roi(rect);
-
-      //console.log('Source File dimension: ' + src.size().width + 'x' + src.size().height);
-      //console.log('Destination File dimension: ' + dst.size().width + 'x' + dst.size().height);
-
-      cv.imshow(canvas, dst);
+      // Crop by copying the face rectangle of the source image onto the output canvas.
+      canvas.getContext('2d').drawImage(image, point1.x, point1.y, width, height, 0, 0, width, height);
 
       let outputFilename = name.toString();
 
@@ -111,68 +123,22 @@ export default async (file, name = 'output.jpg', type = 'image/jpeg', quality = 
     
 };
 
+let openCV;
+
 /**
- * Loads opencv.js.
+ * Loads opencv.js (once) and resolves with `{cv}` when it is ready to use.
  *
- * Installs HTML Canvas emulation to support `cv.imread()` and `cv.imshow`
+ * opencv4js initialises itself on import and needs no DOM, so there is nothing to emulate.
+ * It is imported lazily so that importing this module (e.g. for `--help`) stays fast.
  *
- * Mounts given local folder `localRootDir` in emscripten filesystem folder `rootDir`. By default it will mount the local current directory in emscripten `/work` directory. This means that `/work/foo.txt` will be resolved to the local file `./foo.txt`
- * @param {string} rootDir The directory in emscripten filesystem in which the local filesystem will be mount.
- * @param {string} localRootDir The local directory to mount in emscripten filesystem.
- * @returns {Promise} resolved when the library is ready to use.
+ * The result is wrapped in an object on purpose: `cv` is a thenable (it has a `then` method that
+ * calls back with `cv` itself), so resolving a promise with `cv` directly would never settle.
+ *
+ * @returns {Promise<{cv: object}>}
  */
-function loadOpenCV(rootDir = './work', localRootDir = process.cwd()) {
-  try {
-  if (global.Module && global.Module.onRuntimeInitialized && global.cv && global.cv.imread) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve, reject) => {
-    installDOM();
-    // opencv4js must be loaded *after* global.Module is set (it reads it on load), so it is
-    // imported dynamically below rather than with a static top-level import.
-    let cvModule;
-    global.Module = {
-      onRuntimeInitialized() {
-        // The dynamic import may settle slightly after the runtime initialises, so wait for it.
-        cvModule.then(() => {
-          // We change emscripten current work directory to 'rootDir' so relative paths are resolved
-          // relative to the current local folder, as expected
-          global.cv.FS.chdir(rootDir);
-          resolve();
-        }).catch(reject);
-      },
-      preRun() {
-        // preRun() is another callback like onRuntimeInitialized() but is called just before the
-        // library code runs. Here we mount a local folder in emscripten filesystem and we want to
-        // do this before the library is executed so the filesystem is accessible from the start
-        const FS = global.Module.FS;
-        // create rootDir if it doesn't exists
-        if (!FS.analyzePath(rootDir).exists) {
-          FS.mkdir(rootDir);
-        }
-        // create localRootFolder if it doesn't exists
-        if (!existsSync(localRootDir)) {
-          mkdirSync(localRootDir, {recursive: true});
-        }
-        // FS.mount() is similar to Linux/POSIX mount operation. It basically mounts an external
-        // filesystem with given format, in given current filesystem directory.
-        FS.mount(FS.filesystems.NODEFS, {root: localRootDir}, rootDir);
-      },
-    };
-    cvModule = import('opencv4js').then(m => {
-      global.cv = m.default;
-    });
-    cvModule.catch(reject);
-  });
-  } catch (e) {
-    console.log('Error loading ');
-  }
-}
-function installDOM() {
-  const dom = new JSDOM();
-  global.document = dom.window.document;
-  global.Image = Image;
-  global.HTMLCanvasElement = Canvas;
-  global.ImageData = ImageData;
-  global.HTMLImageElement = Image;
+function loadOpenCV() {
+  openCV ??= import('opencv4js').then(({default: cv}) => new Promise(resolve => {
+    cv.then(() => resolve({cv}));
+  }));
+  return openCV;
 }

@@ -1,6 +1,6 @@
 import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
-import {existsSync, mkdtempSync, rmSync} from 'node:fs';
+import {existsSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -50,6 +50,15 @@ test('Invalid training set path', async () => {
   await assert.rejects(
     facecrop(singleFace, join(outDir, 'out.jpg'), 'image/jpeg', 0.95, 1, fixture('no-such-classifier.xml')),
     /Pre-Trained Classifier file failed to load/,
+  );
+});
+
+test('Classifier file that is not a cascade', async () => {
+  const notACascade = join(outDir, 'not-a-cascade.xml');
+  writeFileSync(notACascade, '<?xml version="1.0"?><nothing/>');
+  await assert.rejects(
+    facecrop(singleFace, join(outDir, 'out.jpg'), 'image/jpeg', 0.95, 1, notACascade),
+    /Not a valid cascade classifier/,
   );
 });
 
